@@ -5,7 +5,7 @@ from pyvis.network import Network
 
 st.set_page_config(page_title="SET50 Shareholder Network", layout="wide")
 st.title("SET50 Shareholder Network")
-st.markdown("Top 5 shareholders of each SET50 company.")
+st.markdown("Top 5 shareholders of each SET50 company — click a node to highlight its connections.")
 
 df = pd.read_csv("set50_top5_shareholders.csv")
 df["Percentage (%)"] = df["Percentage (%)"].str.replace("%", "").astype(float)
@@ -24,19 +24,42 @@ for _, row in df.iterrows():
 pos = nx.spring_layout(G, seed=42, k=1.5, iterations=50)
 
 net = Network(height="750px", width="100%", bgcolor="#FAFAFA", font_color="#333")
-net.set_options('{"physics":{"enabled":false}}')
+net.set_options("""
+{
+  "physics": {"enabled": false},
+  "interaction": {
+    "hover": true,
+    "hoverConnectedEdges": true,
+    "selectConnectedEdges": true,
+    "tooltipDelay": 0
+  },
+  "nodes": {
+    "borderWidth": 2,
+    "borderWidthSelected": 3,
+    "chosen": true,
+    "font": {"size": 11, "face": "Arial"}
+  },
+  "edges": {
+    "smooth": {"type": "continuous"},
+    "chosen": true
+  }
+}
+""")
 
 for node, data in G.nodes(data=True):
     x, y = pos[node]
     if data["type"] == "company":
         net.add_node(node, label=node, title=node, color="#1f77b4", shape="dot", size=25,
-                     x=x*1000, y=y*1000)
+                     x=x*1000, y=y*1000,
+                     color_highlight="#1f77b4", color_hover="#1f77b4")
     else:
         net.add_node(node, label=node, title=node, color="#ff7f0e", shape="square", size=15,
-                     x=x*1000, y=y*1000)
+                     x=x*1000, y=y*1000,
+                     color_highlight="#ff7f0e", color_hover="#ff7f0e")
 
 for u, v, d in G.edges(data=True):
-    net.add_edge(u, v, value=d["weight"], title=f'{d["weight"]:.2f}%', width=max(0.5, d["weight"]/5))
+    net.add_edge(u, v, value=d["weight"], title=f'{d["weight"]:.2f}%', width=max(0.5, d["weight"]/5),
+                 color_highlight="#e74c3c", color_hover="#e74c3c")
 
 c1, c2, c3 = st.columns(3)
 with c1:
