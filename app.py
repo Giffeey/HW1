@@ -43,7 +43,7 @@ total_links = len(df)
 st.sidebar.header("Controls")
 min_pct = st.sidebar.slider("Min ownership (%)", 0.0, 50.0, 0.0, 0.5)
 highlight_co = st.sidebar.selectbox("Highlight company", ["All"] + companies)
-layout = st.sidebar.radio("Layout", ["Force-directed", "Hierarchical"])
+layout = st.sidebar.radio("Layout", ["Force-directed", "Hierarchical", "Simple"])
 
 # ── Filter ──
 fdf = df[df["Percentage (%)"] >= min_pct]
@@ -66,6 +66,14 @@ net = Network(height="750px", width="100%", bgcolor="#FAFAFA", font_color="#333"
 
 if layout == "Hierarchical":
     net.set_options('{"layout":{"hierarchical":{"enabled":true,"direction":"UD","sortMethod":"directed","nodeSpacing":150,"levelSeparation":200}},"physics":{"enabled":false},"edges":{"smooth":{"type":"cubicBezier"}}}')
+elif layout == "Simple":
+    pos = nx.spring_layout(H, seed=42, k=1.5, iterations=50)
+    net.set_options('{"physics":{"enabled":false}}')
+    for node, (x, y) in pos.items():
+        nx_node = H.nodes[node]
+        i = list(H.nodes()).index(node)
+        net.nodes[i]["x"] = x * 1000
+        net.nodes[i]["y"] = y * 1000
 else:
     net.set_options('{"physics":{"stabilization":{"iterations":100},"barnesHut":{"gravitationalConstant":-3000,"springLength":200}}}')
 
