@@ -6,15 +6,15 @@ from pyvis.network import Network
 st.set_page_config(page_title="SET50 Shareholder Network", layout="wide")
 
 df = pd.read_csv("set50_top5_shareholders.csv")
-df["Percentage (%)"] = df["Percentage (%)"].str.replace("%", "").astype(float)
+df["ร้อยละ (%)"] = df["ร้อยละ (%)"].astype(float)
 
 G = nx.Graph()
 for _, row in df.iterrows():
-    co = row["Company Ticker"]
-    sh = row["Shareholder Name"]
-    pct = row["Percentage (%)"]
+    co = row["สัญลักษณ์"]
+    sh = row["ชื่อผู้ถือหุ้น"]
+    pct = row["ร้อยละ (%)"]
     if not G.has_node(co):
-        G.add_node(co, type="company")
+        G.add_node(co, type="company", name=row["ชื่อบริษัท"])
     if not G.has_node(sh):
         G.add_node(sh, type="shareholder")
     G.add_edge(co, sh, weight=pct)
