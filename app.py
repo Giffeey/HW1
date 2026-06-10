@@ -30,7 +30,7 @@ c1.metric("Companies", len(comps))
 c2.metric("Shareholders", len(shs))
 c3.metric("Ownership links", G.number_of_edges())
 
-pos = nx.bipartite_layout(G, comps, scale=3000, align="vertical")
+pos = nx.spring_layout(G, k=2.5, iterations=80, seed=42)
 
 net = Network(height="700px", width="100%", bgcolor="#FFFFFF", font_color="#333")
 net.set_options("""
