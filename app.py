@@ -3,7 +3,7 @@ import pandas as pd
 import networkx as nx
 from pyvis.network import Network
 
-st.set_page_config(page_title="SET50 Shareholder Network", layout="wide")
+st.set_page_config(page_title="SET50 Shareholder Social Graph", layout="wide")
 
 df = pd.read_csv("set50_top5_shareholders.csv")
 df["ร้อยละ (%)"] = df["ร้อยละ (%)"].astype(float)
@@ -19,54 +19,62 @@ for _, row in df.iterrows():
         G.add_node(sh, type="shareholder")
     G.add_edge(co, sh, weight=pct)
 
-comps = [n for n, d in G.nodes(data=True) if d["type"] == "company"]
-shs = [n for n, d in G.nodes(data=True) if d["type"] == "shareholder"]
+deg = dict(G.degree())
+max_deg = max(deg.values())
+min_deg = min(deg.values())
 
-st.title("SET50 Shareholder Network")
-st.caption(f"{len(comps)} companies · {len(shs)} shareholders · {G.number_of_edges()} links — click any node to see its connections")
+st.title("SET50 Shareholder Social Graph")
+st.caption("Drag nodes to explore — click any node to highlight its connections")
 
 c1, c2, c3 = st.columns(3)
-c1.metric("Companies", len(comps))
-c2.metric("Shareholders", len(shs))
-c3.metric("Ownership links", G.number_of_edges())
-
-pos = nx.spring_layout(G, k=2.5, iterations=80, seed=42)
+comps = sum(1 for n in G if G.nodes[n]["type"] == "company")
+shs = sum(1 for n in G if G.nodes[n]["type"] == "shareholder")
+c1.metric("Companies", comps)
+c2.metric("Shareholders", shs)
+c3.metric("Connections", G.number_of_edges())
 
 net = Network(height="700px", width="100%", bgcolor="#FFFFFF", font_color="#333")
 net.set_options("""
 {
-  "physics": {"enabled": false},
+  "physics": {
+    "enabled": true,
+    "barnesHut": {
+      "gravitationalConstant": -2500,
+      "centralGravity": 0.3,
+      "springLength": 200,
+      "springConstant": 0.03,
+      "damping": 0.5
+    },
+    "stabilization": {"iterations": 100}
+  },
   "interaction": {
     "hover": true,
     "hoverConnectedEdges": true,
-    "selectConnectedEdges": true,
-    "tooltipDelay": 0
-  },
-  "nodes": {
-    "borderWidth": 2,
-    "borderWidthSelected": 3,
-    "chosen": true,
-    "font": {"size": 13, "face": "Arial", "strokeWidth": 2, "strokeColor": "#ffffff"}
+    "selectConnectedEdges": false,
+    "tooltipDelay": 100
   },
   "edges": {
     "smooth": {"type": "continuous"},
-    "chosen": true,
-    "color": {"inherit": false, "opacity": 0.4}
+    "color": {"inherit": false}
   }
 }
 """)
 
-for node, data in G.nodes(data=True):
-    x, y = pos[node]
-    if data["type"] == "company":
-        net.add_node(node, label=node, title=node, color="#1a73e8", shape="dot", size=28,
-                     x=x, y=y, borderWidth=0)
+for node in G.nodes():
+    d = deg[node]
+    size = 10 + 25 * (d - min_deg) / (max_deg - min_deg + 1)
+    if G.nodes[node]["type"] == "company":
+        net.add_node(node, label=node, title=G.nodes[node]["name"],
+                     color="#1a73e8", shape="dot", size=size, borderWidth=1)
     else:
-        net.add_node(node, label=node, title=node, color="#e8710a", shape="square", size=15,
-                     x=x, y=y, borderWidth=0)
+        net.add_node(node, label=node, title=node,
+                     color="#e8710a", shape="dot", size=size, borderWidth=1)
 
 for u, v, d in G.edges(data=True):
-    net.add_edge(u, v, width=0.8, color="rgba(0,0,0,0.15)", title=f'{d["weight"]:.2f}%')
+    w = d["weight"]
+    width = 0.5 + 4.5 * min(w / 75, 1)
+    net.add_edge(u, v, width=width, title=f"{w:.2f}%",
+                 color={"color": "rgba(0,0,0,0.3)", "highlight": "rgba(0,0,0,0.6)"})
 
 html = net.generate_html()
 
