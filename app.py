@@ -4,8 +4,6 @@ import networkx as nx
 from pyvis.network import Network
 
 st.set_page_config(page_title="SET50 Shareholder Network", layout="wide")
-st.title("SET50 Shareholder Network")
-st.markdown("Top 5 shareholders of each SET50 company.")
 
 df = pd.read_csv("set50_top5_shareholders.csv")
 df["Percentage (%)"] = df["Percentage (%)"].str.replace("%", "").astype(float)
@@ -21,22 +19,32 @@ for _, row in df.iterrows():
         G.add_node(sh, type="shareholder")
     G.add_edge(co, sh, weight=pct)
 
-pos = nx.spring_layout(G, seed=42, k=1.5, iterations=50)
+comps = [n for n, d in G.nodes(data=True) if d["type"] == "company"]
+shs = [n for n, d in G.nodes(data=True) if d["type"] == "shareholder"]
 
-all_nodes = sorted(G.nodes(), key=lambda n: (G.nodes[n]["type"], n))
-selected = st.sidebar.selectbox("Select company or shareholder", ["None"] + all_nodes)
+st.title("SET50 Shareholder Network")
+st.caption("50 SET50 companies · 22 unique shareholders · 250 ownership links — select a node to explore")
+
+col1, col2, col3 = st.columns([2, 2, 3])
+with col1:
+    st.metric("Companies", len(comps))
+with col2:
+    st.metric("Shareholders", len(shs))
+with col3:
+    selected = st.selectbox("Filter by company or shareholder", ["None"] + sorted(comps) + sorted(shs))
 
 if selected != "None":
     neighbors = list(G.neighbors(selected))
     edges_data = [(n, G[selected][n]["weight"]) for n in neighbors]
     node_type = G.nodes[selected]["type"]
-    st.sidebar.markdown("---")
-    st.sidebar.markdown(f"**{selected}** ({node_type})")
-    st.sidebar.markdown(f"**{len(neighbors)}** connection(s)")
+    badge = "🏢" if node_type == "company" else "👤"
+    st.markdown(f"{badge} **{selected}** · {node_type} · **{len(neighbors)}** connections")
     for nbr, pct in sorted(edges_data, key=lambda x: -x[1]):
-        st.sidebar.markdown(f"- {nbr} &nbsp; ({pct:.2f}%)")
+        st.markdown(f"&nbsp;&nbsp;&nbsp;└ {nbr} ({pct:.2f}%)")
 
-net = Network(height="750px", width="100%", bgcolor="#FAFAFA", font_color="#333")
+pos = nx.bipartite_layout(G, comps, scale=3000, align="vertical")
+
+net = Network(height="700px", width="100%", bgcolor="#FFFFFF", font_color="#333")
 net.set_options("""
 {
   "physics": {"enabled": false},
@@ -50,11 +58,12 @@ net.set_options("""
     "borderWidth": 2,
     "borderWidthSelected": 3,
     "chosen": true,
-    "font": {"size": 11, "face": "Arial"}
+    "font": {"size": 13, "face": "Arial", "strokeWidth": 2, "strokeColor": "#ffffff"}
   },
   "edges": {
     "smooth": {"type": "continuous"},
-    "chosen": true
+    "chosen": true,
+    "color": {"inherit": false, "opacity": 0.4}
   }
 }
 """)
@@ -62,21 +71,20 @@ net.set_options("""
 for node, data in G.nodes(data=True):
     x, y = pos[node]
     if data["type"] == "company":
-        net.add_node(node, label=node, title=node, color="#1f77b4", shape="dot", size=25,
-                     x=x*1000, y=y*1000)
+        net.add_node(node, label=node, title=node, color="#1a73e8", shape="dot", size=28,
+                     x=x, y=y, borderWidth=0)
     else:
-        net.add_node(node, label=node, title=node, color="#ff7f0e", shape="square", size=15,
-                     x=x*1000, y=y*1000)
+        net.add_node(node, label=node, title=node, color="#e8710a", shape="square", size=15,
+                     x=x, y=y, borderWidth=0)
 
 for u, v, d in G.edges(data=True):
-    width = max(0.5, d["weight"] / 5)
-    net.add_edge(u, v, value=d["weight"], title=f'{d["weight"]:.2f}%', width=width)
+    net.add_edge(u, v, width=0.8, color="rgba(0,0,0,0.15)", title=f'{d["weight"]:.2f}%')
 
 html = net.generate_html()
 
-preselect = ""
+preselect_js = ""
 if selected != "None":
-    preselect = f"""
+    preselect_js = f"""
       var sid = "{selected}";
       var connected = new Set([sid]);
       var ce = netw.getConnectedEdges(sid);
@@ -85,60 +93,50 @@ if selected != "None":
         cn.forEach(function(nid) {{ connected.add(nid); }});
       }});
       netw.body.data.nodes.forEach(function(n) {{
-        netw.body.data.nodes.update({{id:n.id, opacity: connected.has(n.id) ? 1.0 : 0.15}});
+        netw.body.data.nodes.update({{id:n.id, opacity: connected.has(n.id) ? 1.0 : 0.1}});
       }});
       var ceSet = new Set(ce);
       netw.body.data.edges.forEach(function(e) {{
-        netw.body.data.edges.update({{id:e.id, opacity: ceSet.has(e.id) ? 1.0 : 0.05, color:{{opacity: ceSet.has(e.id) ? 1 : 0.05}}}});
+        var op = ceSet.has(e.id) ? 1.0 : 0.02;
+        netw.body.data.edges.update({{id:e.id, opacity:op, color:{{opacity:op}}}});
       }});
 """
 
 dim_js = f"""
 <script type="text/javascript">
   document.addEventListener("DOMContentLoaded", function() {{
-    function initDim() {{
+    function init() {{
       var container = document.querySelector(".vis-network");
-      if (!container || !container.network) {{ setTimeout(initDim, 300); return; }}
+      if (!container || !container.network) {{ setTimeout(init, 300); return; }}
       var netw = container.network;
       netw.on("select", function(params) {{
-        var connected = new Set();
-        var selected = params.nodes;
-        if (selected.length === 0) {{
+        if (params.nodes.length === 0) {{
           netw.body.data.nodes.forEach(function(n) {{ netw.body.data.nodes.update({{id:n.id, opacity:1.0}}); }});
           netw.body.data.edges.forEach(function(e) {{ netw.body.data.edges.update({{id:e.id, opacity:1.0, color:{{opacity:1}}}}); }});
           return;
         }}
-        var sid = selected[0];
-        connected.add(sid);
+        var sid = params.nodes[0];
+        var connected = new Set([sid]);
         var ce = netw.getConnectedEdges(sid);
         ce.forEach(function(eid) {{
           var cn = netw.getConnectedNodes(eid);
           cn.forEach(function(nid) {{ connected.add(nid); }});
         }});
         netw.body.data.nodes.forEach(function(n) {{
-          var op = connected.has(n.id) ? 1.0 : 0.15;
-          netw.body.data.nodes.update({{id:n.id, opacity:op}});
+          netw.body.data.nodes.update({{id:n.id, opacity: connected.has(n.id) ? 1.0 : 0.1}});
         }});
         var ceSet = new Set(ce);
         netw.body.data.edges.forEach(function(e) {{
-          var op = ceSet.has(e.id) ? 1.0 : 0.05;
+          var op = ceSet.has(e.id) ? 1.0 : 0.02;
           netw.body.data.edges.update({{id:e.id, opacity:op, color:{{opacity:op}}}});
         }});
       }});
-      {preselect}
+      {preselect_js}
     }}
-    initDim();
+    init();
   }});
 </script>
 """
 html = html.replace("</body>", dim_js + "</body>")
 
-c1, c2, c3 = st.columns(3)
-with c1:
-    st.metric("Companies", sum(1 for _, d in G.nodes(data=True) if d["type"] == "company"))
-with c2:
-    st.metric("Shareholders", sum(1 for _, d in G.nodes(data=True) if d["type"] == "shareholder"))
-with c3:
-    st.metric("Ownership links", G.number_of_edges())
-
-st.components.v1.html(html, height=800, scrolling=True)
+st.components.v1.html(html, height=700, scrolling=True)
