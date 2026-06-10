@@ -5,7 +5,7 @@ from pyvis.network import Network
 
 st.set_page_config(page_title="SET50 Shareholder Network", layout="wide")
 st.title("SET50 Shareholder Network")
-st.markdown("Top 5 shareholders of each SET50 company — click a node to highlight its connections.")
+st.markdown("Top 5 shareholders of each SET50 company.")
 
 df = pd.read_csv("set50_top5_shareholders.csv")
 df["Percentage (%)"] = df["Percentage (%)"].str.replace("%", "").astype(float)
@@ -22,6 +22,19 @@ for _, row in df.iterrows():
     G.add_edge(co, sh, weight=pct)
 
 pos = nx.spring_layout(G, seed=42, k=1.5, iterations=50)
+
+all_nodes = sorted(G.nodes(), key=lambda n: (G.nodes[n]["type"], n))
+selected = st.sidebar.selectbox("Select company or shareholder", ["None"] + all_nodes)
+
+if selected != "None":
+    neighbors = list(G.neighbors(selected))
+    edges_data = [(n, G[selected][n]["weight"]) for n in neighbors]
+    node_type = G.nodes[selected]["type"]
+    st.sidebar.markdown("---")
+    st.sidebar.markdown(f"**{selected}** ({node_type})")
+    st.sidebar.markdown(f"**{len(neighbors)}** connection(s)")
+    for nbr, pct in sorted(edges_data, key=lambda x: -x[1]):
+        st.sidebar.markdown(f"- {nbr} &nbsp; ({pct:.2f}%)")
 
 net = Network(height="750px", width="100%", bgcolor="#FAFAFA", font_color="#333")
 net.set_options("""
@@ -61,41 +74,61 @@ for u, v, d in G.edges(data=True):
 
 html = net.generate_html()
 
-dim_js = """
+preselect = ""
+if selected != "None":
+    preselect = f"""
+      var sid = "{selected}";
+      var connected = new Set([sid]);
+      var ce = netw.getConnectedEdges(sid);
+      ce.forEach(function(eid) {{
+        var cn = netw.getConnectedNodes(eid);
+        cn.forEach(function(nid) {{ connected.add(nid); }});
+      }});
+      netw.body.data.nodes.forEach(function(n) {{
+        netw.body.data.nodes.update({{id:n.id, opacity: connected.has(n.id) ? 1.0 : 0.15}});
+      }});
+      var ceSet = new Set(ce);
+      netw.body.data.edges.forEach(function(e) {{
+        netw.body.data.edges.update({{id:e.id, opacity: ceSet.has(e.id) ? 1.0 : 0.05, color:{{opacity: ceSet.has(e.id) ? 1 : 0.05}}}});
+      }});
+"""
+
+dim_js = f"""
 <script type="text/javascript">
-  document.addEventListener("DOMContentLoaded", function() {
-    function initDim() {
+  document.addEventListener("DOMContentLoaded", function() {{
+    function initDim() {{
       var container = document.querySelector(".vis-network");
-      if (!container || !container.network) { setTimeout(initDim, 300); return; }
+      if (!container || !container.network) {{ setTimeout(initDim, 300); return; }}
       var netw = container.network;
-      netw.on("select", function(params) {
+      netw.on("select", function(params) {{
         var connected = new Set();
         var selected = params.nodes;
-        if (selected.length === 0) {
-          netw.body.data.nodes.forEach(function(n) { netw.body.data.nodes.update({id:n.id, opacity:1.0}); });
-          netw.body.data.edges.forEach(function(e) { netw.body.data.edges.update({id:e.id, opacity:1.0, color:{opacity:1}}); });
+        if (selected.length === 0) {{
+          netw.body.data.nodes.forEach(function(n) {{ netw.body.data.nodes.update({{id:n.id, opacity:1.0}}); }});
+          netw.body.data.edges.forEach(function(e) {{ netw.body.data.edges.update({{id:e.id, opacity:1.0, color:{{opacity:1}}}}); }});
           return;
-        }
+        }}
         var sid = selected[0];
         connected.add(sid);
         var ce = netw.getConnectedEdges(sid);
-        ce.forEach(function(eid) {
+        ce.forEach(function(eid) {{
           var cn = netw.getConnectedNodes(eid);
-          cn.forEach(function(nid) { connected.add(nid); });
-        });
-        netw.body.data.nodes.forEach(function(n) {
+          cn.forEach(function(nid) {{ connected.add(nid); }});
+        }});
+        netw.body.data.nodes.forEach(function(n) {{
           var op = connected.has(n.id) ? 1.0 : 0.15;
-          netw.body.data.nodes.update({id:n.id, opacity:op});
-        });
+          netw.body.data.nodes.update({{id:n.id, opacity:op}});
+        }});
         var ceSet = new Set(ce);
-        netw.body.data.edges.forEach(function(e) {
+        netw.body.data.edges.forEach(function(e) {{
           var op = ceSet.has(e.id) ? 1.0 : 0.05;
-          netw.body.data.edges.update({id:e.id, opacity:op, color:{opacity:op}});
-        });
-      });
-    }
+          netw.body.data.edges.update({{id:e.id, opacity:op, color:{{opacity:op}}}});
+        }});
+      }});
+      {preselect}
+    }}
     initDim();
-  });
+  }});
 </script>
 """
 html = html.replace("</body>", dim_js + "</body>")
