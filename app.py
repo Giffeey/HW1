@@ -65,9 +65,9 @@ for _, row in fdf.iterrows():
 net = Network(height="750px", width="100%", bgcolor="#FAFAFA", font_color="#333")
 
 if layout == "Hierarchical":
-    net.set_options("""{"layout":{"hierarchical":{"enabled":true,"direction":"UD","sortMethod":"directed","nodeSpacing":150,"levelSeparation":200}},"physics":{"enabled":false},"edges":{"smooth":{"type":"cubicBezier"}}}""")
+    net.set_options('{"layout":{"hierarchical":{"enabled":true,"direction":"UD","sortMethod":"directed","nodeSpacing":150,"levelSeparation":200}},"physics":{"enabled":false},"edges":{"smooth":{"type":"cubicBezier"}}}')
 else:
-    net.set_options("""{"physics":{"stabilization":{"iterations":100},"barnesHut":{"gravitationalConstant":-3000,"springLength":200}}}""")
+    net.set_options('{"physics":{"stabilization":{"iterations":100},"barnesHut":{"gravitationalConstant":-3000,"springLength":200}}}')
 
 for node, data in H.nodes(data=True):
     if data["type"] == "company":
@@ -79,11 +79,7 @@ for u, v, d in H.edges(data=True):
     pct = d["weight"]
     net.add_edge(u, v, value=pct, title=f"{pct:.2f}%", width=max(0.5, pct / 5))
 
-with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
-    net.save_graph(tmp.name)
-    with open(tmp.name, "r", encoding="utf-8") as f:
-        html_content = f.read()
-    os.unlink(tmp.name)
+html_content = net.generate_html()
 
 # ── Display ──
 c1, c2, c3, c4 = st.columns(4)
