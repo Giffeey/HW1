@@ -23,24 +23,12 @@ comps = [n for n, d in G.nodes(data=True) if d["type"] == "company"]
 shs = [n for n, d in G.nodes(data=True) if d["type"] == "shareholder"]
 
 st.title("SET50 Shareholder Network")
-st.caption("50 SET50 companies · 22 unique shareholders · 250 ownership links — select a node to explore")
+st.caption(f"{len(comps)} companies · {len(shs)} shareholders · {G.number_of_edges()} links — click any node to see its connections")
 
-col1, col2, col3 = st.columns([2, 2, 3])
-with col1:
-    st.metric("Companies", len(comps))
-with col2:
-    st.metric("Shareholders", len(shs))
-with col3:
-    selected = st.selectbox("Filter by company or shareholder", ["None"] + sorted(comps) + sorted(shs))
-
-if selected != "None":
-    neighbors = list(G.neighbors(selected))
-    edges_data = [(n, G[selected][n]["weight"]) for n in neighbors]
-    node_type = G.nodes[selected]["type"]
-    badge = "🏢" if node_type == "company" else "👤"
-    st.markdown(f"{badge} **{selected}** · {node_type} · **{len(neighbors)}** connections")
-    for nbr, pct in sorted(edges_data, key=lambda x: -x[1]):
-        st.markdown(f"&nbsp;&nbsp;&nbsp;└ {nbr} ({pct:.2f}%)")
+c1, c2, c3 = st.columns(3)
+c1.metric("Companies", len(comps))
+c2.metric("Shareholders", len(shs))
+c3.metric("Ownership links", G.number_of_edges())
 
 pos = nx.bipartite_layout(G, comps, scale=3000, align="vertical")
 
@@ -82,59 +70,38 @@ for u, v, d in G.edges(data=True):
 
 html = net.generate_html()
 
-preselect_js = ""
-if selected != "None":
-    preselect_js = f"""
-      var sid = "{selected}";
-      var connected = new Set([sid]);
-      var ce = netw.getConnectedEdges(sid);
-      ce.forEach(function(eid) {{
-        var cn = netw.getConnectedNodes(eid);
-        cn.forEach(function(nid) {{ connected.add(nid); }});
-      }});
-      netw.body.data.nodes.forEach(function(n) {{
-        netw.body.data.nodes.update({{id:n.id, opacity: connected.has(n.id) ? 1.0 : 0.1}});
-      }});
-      var ceSet = new Set(ce);
-      netw.body.data.edges.forEach(function(e) {{
-        var op = ceSet.has(e.id) ? 1.0 : 0.02;
-        netw.body.data.edges.update({{id:e.id, opacity:op, color:{{opacity:op}}}});
-      }});
-"""
-
-dim_js = f"""
+dim_js = """
 <script type="text/javascript">
-  document.addEventListener("DOMContentLoaded", function() {{
-    function init() {{
+  document.addEventListener("DOMContentLoaded", function() {
+    function init() {
       var container = document.querySelector(".vis-network");
-      if (!container || !container.network) {{ setTimeout(init, 300); return; }}
+      if (!container || !container.network) { setTimeout(init, 300); return; }
       var netw = container.network;
-      netw.on("select", function(params) {{
-        if (params.nodes.length === 0) {{
-          netw.body.data.nodes.forEach(function(n) {{ netw.body.data.nodes.update({{id:n.id, opacity:1.0}}); }});
-          netw.body.data.edges.forEach(function(e) {{ netw.body.data.edges.update({{id:e.id, opacity:1.0, color:{{opacity:1}}}}); }});
+      netw.on("select", function(params) {
+        if (params.nodes.length === 0) {
+          netw.body.data.nodes.forEach(function(n) { netw.body.data.nodes.update({id:n.id, opacity:1.0}); });
+          netw.body.data.edges.forEach(function(e) { netw.body.data.edges.update({id:e.id, opacity:1.0, color:{opacity:1}}); });
           return;
-        }}
+        }
         var sid = params.nodes[0];
         var connected = new Set([sid]);
         var ce = netw.getConnectedEdges(sid);
-        ce.forEach(function(eid) {{
+        ce.forEach(function(eid) {
           var cn = netw.getConnectedNodes(eid);
-          cn.forEach(function(nid) {{ connected.add(nid); }});
-        }});
-        netw.body.data.nodes.forEach(function(n) {{
-          netw.body.data.nodes.update({{id:n.id, opacity: connected.has(n.id) ? 1.0 : 0.1}});
-        }});
+          cn.forEach(function(nid) { connected.add(nid); });
+        });
+        netw.body.data.nodes.forEach(function(n) {
+          netw.body.data.nodes.update({id:n.id, opacity: connected.has(n.id) ? 1.0 : 0.1});
+        });
         var ceSet = new Set(ce);
-        netw.body.data.edges.forEach(function(e) {{
+        netw.body.data.edges.forEach(function(e) {
           var op = ceSet.has(e.id) ? 1.0 : 0.02;
-          netw.body.data.edges.update({{id:e.id, opacity:op, color:{{opacity:op}}}});
-        }});
-      }});
-      {preselect_js}
-    }}
+          netw.body.data.edges.update({id:e.id, opacity:op, color:{opacity:op}});
+        });
+      });
+    }
     init();
-  }});
+  });
 </script>
 """
 html = html.replace("</body>", dim_js + "</body>")
