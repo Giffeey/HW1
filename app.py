@@ -115,3 +115,26 @@ dim_js = """
 html = html.replace("</body>", dim_js + "</body>")
 
 st.components.v1.html(html, height=700, scrolling=True)
+
+deg_c = nx.degree_centrality(G)
+close_c = nx.closeness_centrality(G)
+btwn_c = nx.betweenness_centrality(G, k=min(50, G.number_of_nodes() - 1))
+eigen_c = nx.eigenvector_centrality(G, max_iter=1000)
+katz_c = nx.katz_centrality(G, alpha=0.005, beta=1.0, max_iter=2000)
+
+rows = []
+for n in G.nodes():
+    rows.append({
+        "Node": n,
+        "Type": G.nodes[n]["type"].capitalize(),
+        "Degree": deg[n],
+        "Degree Centrality": round(deg_c.get(n, 0), 4),
+        "Closeness": round(close_c.get(n, 0), 4),
+        "Betweenness": round(btwn_c.get(n, 0), 4),
+        "Eigenvector": round(eigen_c.get(n, 0), 4),
+        "Katz": round(katz_c.get(n, 0), 4),
+    })
+
+tbl = pd.DataFrame(rows).sort_values("Degree", ascending=False).reset_index(drop=True)
+with st.expander("Centrality Table", expanded=False):
+    st.dataframe(tbl, use_container_width=True, hide_index=True)
