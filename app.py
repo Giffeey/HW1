@@ -11,9 +11,10 @@ st.set_page_config(page_title="Data Analysis Dashboard", layout="wide")
 
 CACHE_FILE = "web_graph_cache.pkl.gz"
 
-tab1, tab2 = st.tabs(["HW1 - Shareholder Network", "HW2 - Centrality Analysis"])
+tab = st.radio("", ["HW1 - Shareholder Network", "HW2 - Centrality Analysis"],
+               horizontal=True, label_visibility="collapsed", key="active_tab")
 
-with tab1:
+if tab == "HW1 - Shareholder Network":
     df = pd.read_csv("set50_top5_shareholders.csv")
     df["ร้อยละ (%)"] = df["ร้อยละ (%)"].astype(float)
 
@@ -148,7 +149,7 @@ with tab1:
     with st.expander("Centrality Table", expanded=False):
         st.dataframe(tbl, use_container_width=True, hide_index=True)
 
-with tab2:
+elif tab == "HW2 - Centrality Analysis":
     NEO4J_URI = st.secrets.get("NEO4J_URI", os.environ.get("NEO4J_URI", "bolt://localhost:7687"))
     NEO4J_USER = st.secrets.get("NEO4J_USER", os.environ.get("NEO4J_USER", "neo4j"))
     NEO4J_PASSWORD = st.secrets.get("NEO4J_PASSWORD", os.environ.get("NEO4J_PASSWORD", "password"))
