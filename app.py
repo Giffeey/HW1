@@ -143,37 +143,21 @@ with tab1:
         st.dataframe(tbl, use_container_width=True, hide_index=True)
 
 with tab2:
-    FILEPATH = "quotes_2009-04.txt/quotes_2009-04.txt"
+    import gzip
+    import pickle
+
+    GRAPH_CACHE = "web_graph.pkl.gz"
 
     @st.cache_data
-    def parse_graph(max_lines=100000):
-        G = nx.DiGraph()
-        with open(FILEPATH, "r", encoding="utf-8", errors="replace") as f:
-            cur_p = None
-            cur_links = []
-            for i, line in enumerate(f):
-                line = line.rstrip("\n\r")
-                if not line:
-                    if cur_p and cur_links:
-                        for l in cur_links:
-                            G.add_edge(cur_p, l)
-                    cur_links = []
-                    cur_p = None
-                    continue
-                if line.startswith("P\t"):
-                    cur_p = line[2:]
-                    cur_links = []
-                elif line.startswith("L\t"):
-                    cur_links.append(line[2:])
-                if i >= max_lines:
-                    break
-        return G
+    def load_graph():
+        with gzip.open(GRAPH_CACHE, "rb") as f:
+            return pickle.load(f)
 
     st.title("Web Graph Centrality Analysis (Neo4j-style)")
     st.caption("From quotes_2009-04.txt — directed link graph")
 
-    with st.spinner("Parsing graph…"):
-        G2 = parse_graph(200_000)
+    with st.spinner("Loading graph…"):
+        G2 = load_graph()
 
     UG = G2.to_undirected()
     ncols = G2.number_of_nodes()
@@ -222,15 +206,10 @@ with tab2:
     with st.expander("Centrality Table", expanded=False):
         st.dataframe(tbl2, use_container_width=True, hide_index=True)
 
-    st.subheader("Graph Visualization")
+    st.subheader("Graph Visualization (top 200 nodes by degree)")
 
-    focus_nodes = set()
-    for n, d in deg_vals.items():
-        if d >= 0.02:
-            focus_nodes.add(n)
-
-    if len(focus_nodes) < 10:
-        focus_nodes = set(UG.nodes())
+    sorted_nodes = sorted(deg_vals.items(), key=lambda x: -x[1])
+    focus_nodes = {n for n, _ in sorted_nodes[:200]}
 
     sub = UG.subgraph(focus_nodes)
 
