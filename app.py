@@ -150,7 +150,7 @@ with tab2:
     NEO4J_PASSWORD = st.secrets.get("NEO4J_PASSWORD", os.environ.get("NEO4J_PASSWORD", "password"))
 
     st.title("Web Graph Centrality Analysis (Neo4j Cypher)")
-    st.caption("quotes_2009-04.txt — all measures computed via Cypher + GDS")
+    st.caption("quotes_2009-04.txt — 5 measures via GDS, Betweenness & Bridges via Cypher heuristics")
 
     if not NEO4J_URI:
         st.info(
@@ -166,77 +166,105 @@ with tab2:
         )
     else:
         @st.cache_data
-        def run_gds():
+        def compute_all():
             driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
             results = {}
 
             with driver.session() as session:
                 session.run("CALL gds.graph.drop('web-graph', false)").consume()
                 session.run(
-                    "CALL gds.graph.project('web-graph', 'Page', "
-                    "{LINKS_TO: {orientation: 'UNDIRECTED'}})"
+                    "CALL gds.graph.project('web-graph', 'Page', 'LINKS_TO', "
+                    "{orientation: 'UNDIRECTED', memory: '2GB'})"
                 ).consume()
 
                 proj_rec = session.run(
-                    "CALL gds.graph.nodeProperties.stream('web-graph', 'id') "
-                    "YIELD nodeId, propertyValue RETURN count(*) AS c"
+                    "MATCH (p:Page) RETURN count(*) AS c"
                 ).single()
                 proj_count = proj_rec["c"] if proj_rec else 0
 
-                for label, algo, query in [
-                    ("Degree", "gds.degree.stream",
-                     "CALL gds.degree.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
-                    ("Closeness", "gds.closeness.stream",
-                     "CALL gds.closeness.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
-                    ("Betweenness", "gds.betweenness.stream",
-                     "CALL gds.betweenness.stream('web-graph', {maxDepth:4}) YIELD nodeId, score RETURN nodeId, score"),
-                    ("Eigenvector", "gds.eigenvector.stream",
-                     "CALL gds.eigenvector.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
-                    ("PageRank", "gds.pageRank.stream",
-                     "CALL gds.pageRank.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
-                    ("Louvain", "gds.louvain.stream",
-                     "CALL gds.louvain.stream('web-graph') YIELD nodeId, communityId RETURN nodeId, communityId"),
-                    ("Bridge", "gds.bridges.stream",
-                     "CALL gds.bridges.stream('web-graph') YIELD nodeId RETURN DISTINCT nodeId"),
-                ]:
-                    records = list(session.run(query))
-                    results[label] = records
-                    session.run(f"CALL {algo}.stats('web-graph') YIELD preProcessingMillis RETURN 1").consume()
+                gds_procs = [
+                    ("Degree", "CALL gds.degree.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                    ("Closeness", "CALL gds.closeness.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                    ("Eigenvector", "CALL gds.eigenvector.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                    ("PageRank", "CALL gds.pageRank.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                    ("Louvain", "CALL gds.louvain.stream('web-graph') YIELD nodeId, communityId RETURN nodeId, communityId"),
+                ]
+
+                for label, query in gds_procs:
+                    results[label] = list(session.run(query))
+
+                # Betweenness approximation via Cypher
+                results["Betweenness"] = list(session.run(
+                    "MATCH (a)-[:LINKS_TO]-(b)-[:LINKS_TO]-(c) "
+                    "WHERE a <> c RETURN b.id AS url, count(*) AS score"
+                ))
+
+                # Bridges: find edges between Louvain communities
+                comm_edges = list(session.run(
+                    "MATCH (a)-[:LINKS_TO]-(b) "
+                    "RETURN a.id AS src, b.id AS dst"
+                ))
 
                 node_id_map = {}
                 for r in session.run("MATCH (p:Page) RETURN id(p) AS nodeId, p.id AS url"):
                     node_id_map[r["nodeId"]] = r["url"]
 
-            driver.close()
-            return results, node_id_map, proj_count
+                session.run("CALL gds.graph.drop('web-graph', false)").consume()
 
-        with st.spinner("Running GDS centrality algorithms via Cypher…"):
-            gds_results, node_id_map, proj_count = run_gds()
+            driver.close()
+
+            # Compute bridges from Louvain communities + edges
+            node_url_map = node_id_map
+            louvain_data = {}
+            for r in results["Louvain"]:
+                url = node_url_map.get(r["nodeId"], f"node_{r['nodeId']}")
+                louvain_data[url] = r["communityId"]
+
+            neighbor_comms = {}
+            for r in comm_edges:
+                s, d = r["src"], r["dst"]
+                sc = louvain_data.get(s)
+                dc = louvain_data.get(d)
+                if sc is not None and dc is not None:
+                    neighbor_comms.setdefault(s, set()).add(dc)
+                    neighbor_comms.setdefault(d, set()).add(sc)
+
+            bridge_set = set()
+            for url, comms in neighbor_comms.items():
+                if len(comms) > 1:
+                    bridge_set.add(url)
+
+            results["Bridge"] = bridge_set
+            results["_node_url_map"] = node_url_map
+            results["_louvain_data"] = louvain_data
+            return results, proj_count
+
+        with st.spinner("Running GDS + Cypher algorithms…"):
+            gds_results, proj_count = compute_all()
 
         deg_map = {}
         close_map = {}
-        btwn_map = {}
         eigen_map = {}
         pr_map = {}
-        comm_map = {}
-        bridge_set = set()
+        comm_map = gds_results["_louvain_data"]
+        node_url_map = gds_results["_node_url_map"]
+        btwn_map = {}
+        bridge_set = gds_results["Bridge"]
 
-        for label, out_map in [
-            ("Degree", deg_map), ("Closeness", close_map),
-            ("Betweenness", btwn_map), ("Eigenvector", eigen_map),
-            ("PageRank", pr_map),
-        ]:
-            for r in gds_results[label]:
-                url = node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")
-                out_map[url] = r["score"]
-
-        for r in gds_results["Louvain"]:
-            url = node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")
-            comm_map[url] = r["communityId"]
-
-        for r in gds_results["Bridge"]:
-            url = node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")
-            bridge_set.add(url)
+        for r in gds_results["Degree"]:
+            url = node_url_map.get(r["nodeId"], f"node_{r['nodeId']}")
+            deg_map[url] = r["score"]
+        for r in gds_results["Closeness"]:
+            url = node_url_map.get(r["nodeId"], f"node_{r['nodeId']}")
+            close_map[url] = r["score"]
+        for r in gds_results["Eigenvector"]:
+            url = node_url_map.get(r["nodeId"], f"node_{r['nodeId']}")
+            eigen_map[url] = r["score"]
+        for r in gds_results["PageRank"]:
+            url = node_url_map.get(r["nodeId"], f"node_{r['nodeId']}")
+            pr_map[url] = r["score"]
+        for r in gds_results["Betweenness"]:
+            btwn_map[r["url"]] = r["score"]
 
         all_urls = set(deg_map)
 
@@ -244,7 +272,8 @@ with tab2:
         c1, c2, c3 = st.columns(3)
         c1.metric("Nodes (URLs)", len(all_urls))
         c2.metric("Edges in projection", proj_count)
-        c3.metric("Measures", "7 (Degree, Closeness, Betweenness, Eigenvector, PageRank, Louvain, Bridges)")
+        c3.metric("Measures", "7 (Degree, Closeness, Betweenness*, Eigenvector, PageRank, Louvain, Bridges*)")
+        st.caption("*Betweenness via 2-hop Cypher heuristic; Bridges via Louvain multi-community detection")
 
         rows = []
         for url in sorted(all_urls, key=lambda u: -deg_map.get(u, 0)):
@@ -252,7 +281,7 @@ with tab2:
                 "Node": url[:80],
                 "Degree": round(deg_map.get(url, 0), 6),
                 "Closeness": round(close_map.get(url, 0), 6),
-                "Betweenness": round(btwn_map.get(url, 0), 6),
+                "Betweenness": int(btwn_map.get(url, 0)),
                 "Eigenvector": round(eigen_map.get(url, 0), 6),
                 "PageRank": round(pr_map.get(url, 0), 6),
                 "Bridge": "Yes" if url in bridge_set else "",
