@@ -420,6 +420,13 @@ elif tab == "HW2 - Centrality Analysis":
         html2 = html2.replace("</body>", dim_js2 + "</body>")
         st.components.v1.html(html2, height=650, scrolling=True)
 
+        if is_comm:
+            st.caption("Color = community ID (each color is a different Louvain community). Size = degree.")
+        elif is_br:
+            st.caption("Red = bridge node (connects multiple communities). Gray = non-bridge. Size = degree.")
+        else:
+            st.caption("Blue → Orange = low → high value. Size = measure value.")
+
         rows = []
         for u in all_urls:
             rows.append({
