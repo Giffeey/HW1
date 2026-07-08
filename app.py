@@ -154,7 +154,7 @@ with tab2:
     NEO4J_PASSWORD = st.secrets.get("NEO4J_PASSWORD", os.environ.get("NEO4J_PASSWORD", "password"))
 
     st.title("Web Graph Centrality Analysis (Neo4j Cypher)")
-    st.caption("quotes_2009-04.txt — 5 measures via GDS, Betweenness & Bridges via Cypher heuristics")
+    st.caption("quotes_2009-04.txt — 7 measures: Degree, Closeness, Betweenness, Eigenvector, PageRank, Community (Louvain), Bridges")
 
     if not NEO4J_URI:
         st.info(
@@ -262,10 +262,6 @@ with tab2:
         proj_count = data["count"]
 
         all_urls = sorted(deg_map, key=lambda u: -deg_map[u])
-        min_v = {k: min(v.values()) for k, v in [("Degree", deg_map), ("Closeness", close_map),
-                   ("Betweenness", btwn_map), ("Eigenvector", eigen_map), ("PageRank", pr_map)]}
-        max_v = {k: max(v.values()) for k, v in [("Degree", deg_map), ("Closeness", close_map),
-                   ("Betweenness", btwn_map), ("Eigenvector", eigen_map), ("PageRank", pr_map)]}
 
         st.subheader("Filters")
         c1, c2 = st.columns([2, 1])
@@ -273,22 +269,8 @@ with tab2:
             max_nodes = st.slider("Max nodes", 10, 200, 80, help="Limit nodes shown in graph")
         with c2:
             show_bridge = st.checkbox("Bridge nodes only", False)
-        with st.expander("Metric range filters"):
-            fc1, fc2, fc3, fc4, fc5 = st.columns(5)
-            deg_r = fc1.slider("Degree", min_value=0.0, max_value=1.0, value=(0.0, 1.0), step=0.001)
-            close_r = fc2.slider("Closeness", min_value=0.0, max_value=1.0, value=(0.0, 1.0), step=0.001)
-            btwn_r = fc3.slider("Betweenness", min_value=0, max_value=int(max_v["Betweenness"]),
-                                value=(0, int(max_v["Betweenness"])), step=1)
-            eigen_r = fc4.slider("Eigenvector", min_value=0.0, max_value=1.0, value=(0.0, 1.0), step=0.001)
-            pr_r = fc5.slider("PageRank", min_value=0.0, max_value=1.0, value=(0.0, 1.0), step=0.001)
 
-        filtered = []
-        for u in all_urls:
-            if (deg_r[0] <= deg_map[u] <= deg_r[1] and close_r[0] <= close_map[u] <= close_r[1]
-                    and btwn_r[0] <= btwn_map.get(u, 0) <= btwn_r[1]
-                    and eigen_r[0] <= eigen_map[u] <= eigen_r[1] and pr_r[0] <= pr_map[u] <= pr_r[1]
-                    and (not show_bridge or u in bridge_set)):
-                filtered.append(u)
+        filtered = [u for u in all_urls if not show_bridge or u in bridge_set]
 
         focus_nodes = filtered[:max_nodes]
         focus_set = set(focus_nodes)
