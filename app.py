@@ -244,7 +244,7 @@ elif tab == "HW2 - Centrality Analysis":
                 "deg": deg_map, "close": close_map, "btwn": btwn_map,
                 "eigen": eigen_map, "pr": pr_map,
                 "comm": louvain_data, "bridge": bridge_set,
-                "count": proj_count,
+                "count": proj_count, "edge_count": len(comm_edges),
             }
             with gzip.open(path, "wb") as f:
                 pickle.dump(out, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -261,6 +261,7 @@ elif tab == "HW2 - Centrality Analysis":
         comm_map = data["comm"]
         bridge_set = data["bridge"]
         proj_count = data["count"]
+        edge_count = data["edge_count"]
 
         all_urls = sorted(deg_map, key=lambda u: -deg_map[u])
 
@@ -307,7 +308,7 @@ elif tab == "HW2 - Centrality Analysis":
         is_comm = selected == "Community (Louvain)"
         is_br = selected == "Bridges"
 
-        st.subheader(f"Graph — {selected} ({len(focus_nodes)} nodes)")
+        st.subheader(f"Graph — {selected} ({len(focus_nodes)} nodes shown · {proj_count:,} total nodes · {edge_count:,} edges)")
         net2 = Network(height="650px", width="100%", bgcolor="#FFFFFF", font_color="#333")
         net2.set_options("""
         {
