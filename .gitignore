@@ -3,3 +3,4 @@ lib/
 __pycache__/
 *.html
 quotes_2009-04.txt/
+.streamlit/secrets.toml
