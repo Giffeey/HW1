@@ -253,6 +253,7 @@ elif tab == "HW2 - Centrality Analysis":
                 "eigen": eigen_map, "pr": pr_map,
                 "comm": louvain_data, "bridge": bridge_set,
                 "count": proj_count, "edge_count": len(comm_edges),
+                "cache_version": 2,
             }
             with gzip.open(path, "wb") as f:
                 pickle.dump(out, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -270,7 +271,8 @@ elif tab == "HW2 - Centrality Analysis":
         bridge_set = data["bridge"]
         proj_count = data["count"]
         edge_count = data.get("edge_count")
-        if edge_count is None:
+        cache_ver = data.get("cache_version")
+        if edge_count is None or cache_ver != 2:
             if os.path.exists(CACHE_FILE):
                 os.remove(CACHE_FILE)
             st.cache_data.clear()
