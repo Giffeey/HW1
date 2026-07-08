@@ -11,7 +11,7 @@ st.set_page_config(page_title="Data Analysis Dashboard", layout="wide")
 
 CACHE_FILE = "web_graph_cache.pkl.gz"
 
-tab1, tab2 = st.tabs(["Shareholder Network", "Centrality Analysis"])
+tab1, tab2 = st.tabs(["HW1 - Shareholder Network", "HW2 - Centrality Analysis"])
 
 with tab1:
     df = pd.read_csv("set50_top5_shareholders.csv")
@@ -263,23 +263,50 @@ with tab2:
 
         all_urls = sorted(deg_map, key=lambda u: -deg_map[u])
 
+        measure_data = {
+            "Degree": deg_map,
+            "Closeness": close_map,
+            "Betweenness": btwn_map,
+            "Eigenvector": eigen_map,
+            "PageRank": pr_map,
+            "Community (Louvain)": comm_map,
+            "Bridges": bridge_set,
+        }
+        measure_labels = {
+            "Degree": "Degree", "Closeness": "Closeness", "Betweenness": "Betweenness",
+            "Eigenvector": "Eigenvector", "PageRank": "PageRank",
+            "Community (Louvain)": "Community", "Bridges": "Bridge",
+        }
+        max_deg = max(deg_map.values()) if deg_map else 1
+
+        selected = st.selectbox("Visualize by", list(measure_data.keys()), index=0)
+
         st.subheader("Filters")
         c1, c2 = st.columns([2, 1])
         with c1:
-            max_nodes = st.slider("Max nodes", 10, 200, 80, help="Limit nodes shown in graph")
+            max_nodes = st.slider("Max nodes", 10, 200, 80)
         with c2:
             show_bridge = st.checkbox("Bridge nodes only", False)
 
         filtered = [u for u in all_urls if not show_bridge or u in bridge_set]
-
         focus_nodes = filtered[:max_nodes]
         focus_set = set(focus_nodes)
 
-        focus_deg = {u: deg_map[u] for u in focus_nodes}
-        max_d = max(focus_deg.values()) if focus_deg else 1
-        min_d = min(focus_deg.values()) if focus_deg else 1
+        focus_vals = {}
+        for u in focus_nodes:
+            if selected == "Bridges":
+                focus_vals[u] = 1.0 if u in bridge_set else 0.0
+            elif selected == "Community (Louvain)":
+                focus_vals[u] = comm_map.get(u, 0)
+            else:
+                focus_vals[u] = measure_data[selected].get(u, 0)
 
-        st.subheader(f"Graph ({len(focus_nodes)} nodes shown)")
+        vals_list = [v for v in focus_vals.values()]
+        vmin, vmax = (min(vals_list), max(vals_list)) if vals_list else (0, 1)
+        is_comm = selected == "Community (Louvain)"
+        is_br = selected == "Bridges"
+
+        st.subheader(f"Graph — {selected} ({len(focus_nodes)} nodes)")
         net2 = Network(height="650px", width="100%", bgcolor="#FFFFFF", font_color="#333")
         net2.set_options("""
         {
@@ -310,13 +337,35 @@ with tab2:
                    "#469990", "#dcbeff", "#9A6324", "#fffac8", "#800000",
                    "#aaffc3", "#808000", "#ffd8b1", "#000075", "#a9a9a9"]
 
+        def val_to_color(val, lo, hi):
+            if is_comm:
+                return palette[int(val) % len(palette)]
+            if is_br:
+                return "#e6194b" if val > 0.5 else "#cccccc"
+            if hi <= lo:
+                return "#1a73e8"
+            t = (val - lo) / (hi - lo)
+            r = 0.10 + 0.85 * t + 0.65 * max(0, t - 0.5) * 2
+            g = 0.45 + 0.46 * t - 1.0 * max(0, t - 0.5) * 2
+            b = 0.91 - 0.91 * t + 0.20 * max(0, t - 0.5) * 2
+            r, g, b = max(0, min(1, r)), max(0, min(1, g)), max(0, min(1, b))
+            return f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}"
+
         for url in focus_nodes:
-            d = focus_deg[url]
-            sz = 12 + 28 * (d - min_d) / (max_d - min_d + 1)
-            comm_id = comm_map.get(url, 0)
+            val = focus_vals[url]
+            if is_comm or is_br:
+                sz = 12 + 28 * (deg_map.get(url, 0) / max_deg)
+            else:
+                sz = 12 + 28 * ((val - vmin) / (vmax - vmin + 1e-10)) if vmax > vmin else 20
+            if is_comm:
+                title = f"{url}\nCommunity: {int(val)}"
+            elif is_br:
+                title = f"{url}\nBridge: {'Yes' if val > 0.5 else 'No'}"
+            else:
+                title = f"{url}\n{measure_labels[selected]}: {val:.6f}"
             label = url.rsplit("/", 1)[-1][:25] if "/" in url else url[:25]
-            net2.add_node(url, label=label, title=f"{url}\nDeg:{d:.4f} Com:{comm_id}",
-                          color=palette[comm_id % len(palette)], shape="dot", size=sz, borderWidth=1)
+            net2.add_node(url, label=label, title=title,
+                          color=val_to_color(val, vmin, vmax), shape="dot", size=sz, borderWidth=1)
 
         driver2 = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
         with driver2.session() as session:
