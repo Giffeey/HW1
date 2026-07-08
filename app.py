@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import networkx as nx
 from pyvis.network import Network
+import os
+from neo4j import GraphDatabase
 
 st.set_page_config(page_title="Data Analysis Dashboard", layout="wide")
 
@@ -143,160 +145,217 @@ with tab1:
         st.dataframe(tbl, use_container_width=True, hide_index=True)
 
 with tab2:
-    import gzip
-    import pickle
+    NEO4J_URI = st.secrets.get("NEO4J_URI", os.environ.get("NEO4J_URI", ""))
+    NEO4J_USER = st.secrets.get("NEO4J_USER", os.environ.get("NEO4J_USER", ""))
+    NEO4J_PASSWORD = st.secrets.get("NEO4J_PASSWORD", os.environ.get("NEO4J_PASSWORD", ""))
 
-    GRAPH_CACHE = "web_graph.pkl.gz"
+    st.title("Web Graph Centrality Analysis (Neo4j Cypher)")
+    st.caption("quotes_2009-04.txt — all measures computed via Cypher + GDS")
 
-    @st.cache_data
-    def load_graph():
-        with gzip.open(GRAPH_CACHE, "rb") as f:
-            return pickle.load(f)
+    if not NEO4J_URI:
+        st.info(
+            "Configure Neo4j connection to enable Cypher-based centrality:\n\n"
+            "1. Set up a Neo4j instance (AuraDB free tier works, enable GDS plugin)\n"
+            "2. Create `.streamlit/secrets.toml`:\n"
+            "```toml\n"
+            'NEO4J_URI = "bolt://your-instance.databases.neo4j.io:7687"\n'
+            'NEO4J_USER = "neo4j"\n'
+            'NEO4J_PASSWORD = "your-password"\n'
+            "```\n"
+            "3. Run `py import_to_neo4j.py` to load the graph"
+        )
+    else:
+        @st.cache_data
+        def run_gds():
+            driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+            results = {}
 
-    st.title("Web Graph Centrality Analysis (Neo4j-style)")
-    st.caption("From quotes_2009-04.txt — directed link graph")
+            with driver.session() as session:
+                session.run("CALL gds.graph.drop('web-graph', false)").consume()
+                session.run(
+                    "CALL gds.graph.project('web-graph', 'Page', "
+                    "{LINKS_TO: {orientation: 'UNDIRECTED'}})"
+                ).consume()
 
-    with st.spinner("Loading graph…"):
-        G2 = load_graph()
+                proj_rec = session.run(
+                    "CALL gds.graph.nodeProperties.stream('web-graph', 'id') "
+                    "YIELD nodeId, propertyValue RETURN count(*) AS c"
+                ).single()
+                proj_count = proj_rec["c"] if proj_rec else 0
 
-    UG = G2.to_undirected()
-    ncols = G2.number_of_nodes()
-    nedges = G2.number_of_edges()
+                for label, algo, query in [
+                    ("Degree", "gds.degree.stream",
+                     "CALL gds.degree.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                    ("Closeness", "gds.closeness.stream",
+                     "CALL gds.closeness.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                    ("Betweenness", "gds.betweenness.stream",
+                     "CALL gds.betweenness.stream('web-graph', {maxDepth:4}) YIELD nodeId, score RETURN nodeId, score"),
+                    ("Eigenvector", "gds.eigenvector.stream",
+                     "CALL gds.eigenvector.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                    ("PageRank", "gds.pageRank.stream",
+                     "CALL gds.pageRank.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                    ("Louvain", "gds.louvain.stream",
+                     "CALL gds.louvain.stream('web-graph') YIELD nodeId, communityId RETURN nodeId, communityId"),
+                    ("Bridge", "gds.bridges.stream",
+                     "CALL gds.bridges.stream('web-graph') YIELD nodeId RETURN DISTINCT nodeId"),
+                ]:
+                    records = list(session.run(query))
+                    results[label] = records
+                    session.run(f"CALL {algo}.stats('web-graph') YIELD preProcessingMillis RETURN 1").consume()
 
-    st.subheader("Graph Summary")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Nodes (URLs)", ncols)
-    c2.metric("Directed Edges", nedges)
-    c3.metric("Avg Degree", f"{2 * nedges / ncols:.2f}")
+                node_id_map = {}
+                for r in session.run("MATCH (p:Page) RETURN id(p) AS nodeId, p.id AS url"):
+                    node_id_map[r["nodeId"]] = r["url"]
 
-    with st.spinner("Computing centralities…"):
-        deg_vals = nx.degree_centrality(UG)
-        close_vals = nx.closeness_centrality(UG)
-        btwn_vals = nx.betweenness_centrality(UG, k=min(100, UG.number_of_nodes() - 1))
-        lcc_nodes = max(nx.connected_components(UG), key=len)
-        lcc = UG.subgraph(lcc_nodes)
-        eigen_lcc = nx.eigenvector_centrality(lcc, max_iter=1000, tol=1e-6)
-        eigen_vals = {n: eigen_lcc.get(n, 0) for n in UG.nodes()}
-        pr_vals = nx.pagerank(G2, alpha=0.85)
+            driver.close()
+            return results, node_id_map, proj_count
 
-        communities = list(nx.community.louvain_communities(UG, seed=42))
-        node_comm = {}
-        for i, c in enumerate(communities):
-            for n in c:
-                node_comm[n] = i
+        with st.spinner("Running GDS centrality algorithms via Cypher…"):
+            gds_results, node_id_map, proj_count = run_gds()
 
-        articulation = set()
-        if lcc.number_of_nodes() > 2:
-            articulation = set(nx.articulation_points(lcc))
+        deg_map = {}
+        close_map = {}
+        btwn_map = {}
+        eigen_map = {}
+        pr_map = {}
+        comm_map = {}
+        bridge_set = set()
 
-    rows = []
-    for n in UG.nodes():
-        rows.append({
-            "Node": n[:80],
-            "Degree": round(deg_vals.get(n, 0), 6),
-            "Closeness": round(close_vals.get(n, 0), 6),
-            "Betweenness": round(btwn_vals.get(n, 0), 6),
-            "Eigenvector": round(eigen_vals.get(n, 0), 6),
-            "PageRank": round(pr_vals.get(n, 0), 6),
-            "Bridge": "Yes" if n in articulation else "",
-            "Community": node_comm.get(n, -1),
-        })
+        for label, out_map in [
+            ("Degree", deg_map), ("Closeness", close_map),
+            ("Betweenness", btwn_map), ("Eigenvector", eigen_map),
+            ("PageRank", pr_map),
+        ]:
+            for r in gds_results[label]:
+                url = node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")
+                out_map[url] = r["score"]
 
-    tbl2 = pd.DataFrame(rows).sort_values("Degree", ascending=False).reset_index(drop=True)
-    with st.expander("Centrality Table", expanded=False):
-        st.dataframe(tbl2, use_container_width=True, hide_index=True)
+        for r in gds_results["Louvain"]:
+            url = node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")
+            comm_map[url] = r["communityId"]
 
-    st.subheader("Graph Visualization (top 200 nodes by degree)")
+        for r in gds_results["Bridge"]:
+            url = node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")
+            bridge_set.add(url)
 
-    sorted_nodes = sorted(deg_vals.items(), key=lambda x: -x[1])
-    focus_nodes = {n for n, _ in sorted_nodes[:200]}
+        all_urls = set(deg_map)
 
-    sub = UG.subgraph(focus_nodes)
+        st.subheader("Graph Summary")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Nodes (URLs)", len(all_urls))
+        c2.metric("Edges in projection", proj_count)
+        c3.metric("Measures", "7 (Degree, Closeness, Betweenness, Eigenvector, PageRank, Louvain, Bridges)")
 
-    focus_communities = {}
-    for i, c in enumerate(communities):
-        for n in c:
-            if n in focus_nodes:
-                focus_communities[n] = i
+        rows = []
+        for url in sorted(all_urls, key=lambda u: -deg_map.get(u, 0)):
+            rows.append({
+                "Node": url[:80],
+                "Degree": round(deg_map.get(url, 0), 6),
+                "Closeness": round(close_map.get(url, 0), 6),
+                "Betweenness": round(btwn_map.get(url, 0), 6),
+                "Eigenvector": round(eigen_map.get(url, 0), 6),
+                "PageRank": round(pr_map.get(url, 0), 6),
+                "Bridge": "Yes" if url in bridge_set else "",
+                "Community": comm_map.get(url, -1),
+            })
 
-    focus_deg = {n: sub.degree(n) for n in sub.nodes()}
-    max_d = max(focus_deg.values()) if focus_deg else 1
-    min_d = min(focus_deg.values()) if focus_deg else 1
+        tbl2 = pd.DataFrame(rows)
+        with st.expander("Centrality Table", expanded=False):
+            st.dataframe(tbl2, use_container_width=True, hide_index=True)
 
-    palette = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
-               "#911eb4", "#42d4f4", "#f032e6", "#bfef45", "#fabed4",
-               "#469990", "#dcbeff", "#9A6324", "#fffac8", "#800000",
-               "#aaffc3", "#808000", "#ffd8b1", "#000075", "#a9a9a9"]
+        st.subheader("Graph Visualization (top 200 nodes by degree)")
 
-    net2 = Network(height="750px", width="100%", bgcolor="#FFFFFF", font_color="#333")
-    net2.set_options("""
-    {
-      "physics": {
-        "enabled": true,
-        "barnesHut": {
-          "gravitationalConstant": -2000,
-          "centralGravity": 0.3,
-          "springLength": 180,
-          "springConstant": 0.04,
-          "damping": 0.5
-        },
-        "stabilization": {"iterations": 150}
-      },
-      "interaction": {"hover": true, "tooltipDelay": 100},
-      "edges": {
-        "smooth": {"type": "continuous"},
-        "color": {"inherit": false, "opacity": 0.25},
-        "arrows": {"to": {"enabled": true, "scaleFactor": 0.5}}
-      }
-    }
-    """)
+        focus_nodes = [u for u, _ in sorted(deg_map.items(), key=lambda x: -x[1])[:200]]
+        focus_set = set(focus_nodes)
 
-    for node in sub.nodes():
-        d = focus_deg[node]
-        sz = 8 + 22 * (d - min_d) / (max_d - min_d + 1)
-        comm_id = focus_communities.get(node, 0)
-        color = palette[comm_id % len(palette)]
-        net2.add_node(node, label="", title=f"{node[:100]}\nCom:{comm_id} Deg:{d}",
-                      color=color, shape="dot", size=sz, borderWidth=0)
+        focus_deg = {u: deg_map.get(u, 0) for u in focus_nodes}
+        max_d = max(focus_deg.values()) if focus_deg else 1
+        min_d = min(focus_deg.values()) if focus_deg else 1
 
-    for u, v in sub.edges():
-        net2.add_edge(u, v, width=0.5, color="rgba(0,0,0,0.15)")
+        palette = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
+                   "#911eb4", "#42d4f4", "#f032e6", "#bfef45", "#fabed4",
+                   "#469990", "#dcbeff", "#9A6324", "#fffac8", "#800000",
+                   "#aaffc3", "#808000", "#ffd8b1", "#000075", "#a9a9a9"]
 
-    html2 = net2.generate_html()
-
-    dim_js2 = """
-    <script type="text/javascript">
-      document.addEventListener("DOMContentLoaded", function() {
-        function init() {
-          var container = document.querySelector(".vis-network");
-          if (!container || !container.network) { setTimeout(init, 300); return; }
-          var netw = container.network;
-          netw.on("select", function(params) {
-            if (params.nodes.length === 0) {
-              netw.body.data.nodes.forEach(function(n) { netw.body.data.nodes.update({id:n.id, opacity:1.0}); });
-              netw.body.data.edges.forEach(function(e) { netw.body.data.edges.update({id:e.id, opacity:1.0, color:{opacity:1}}); });
-              return;
-            }
-            var sid = params.nodes[0];
-            var connected = new Set([sid]);
-            var ce = netw.getConnectedEdges(sid);
-            ce.forEach(function(eid) {
-              var cn = netw.getConnectedNodes(eid);
-              cn.forEach(function(nid) { connected.add(nid); });
-            });
-            netw.body.data.nodes.forEach(function(n) {
-              netw.body.data.nodes.update({id:n.id, opacity: connected.has(n.id) ? 1.0 : 0.1});
-            });
-            var ceSet = new Set(ce);
-            netw.body.data.edges.forEach(function(e) {
-              var op = ceSet.has(e.id) ? 1.0 : 0.02;
-              netw.body.data.edges.update({id:e.id, opacity:op, color:{opacity:op}});
-            });
-          });
+        net2 = Network(height="750px", width="100%", bgcolor="#FFFFFF", font_color="#333")
+        net2.set_options("""
+        {
+          "physics": {
+            "enabled": true,
+            "barnesHut": {
+              "gravitationalConstant": -2000,
+              "centralGravity": 0.3,
+              "springLength": 180,
+              "springConstant": 0.04,
+              "damping": 0.5
+            },
+            "stabilization": {"iterations": 150}
+          },
+          "interaction": {"hover": true, "tooltipDelay": 100},
+          "edges": {
+            "smooth": {"type": "continuous"},
+            "color": {"inherit": false, "opacity": 0.25},
+            "arrows": {"to": {"enabled": true, "scaleFactor": 0.5}}
+          }
         }
-        init();
-      });
-    </script>
-    """
-    html2 = html2.replace("</body>", dim_js2 + "</body>")
-    st.components.v1.html(html2, height=750, scrolling=True)
+        """)
+
+        for url in focus_nodes:
+            d = focus_deg.get(url, 0)
+            sz = 8 + 22 * (d - min_d) / (max_d - min_d + 1)
+            comm_id = comm_map.get(url, 0)
+            color = palette[comm_id % len(palette)]
+            net2.add_node(url, label="", title=f"{url[:100]}\nCom:{comm_id} Deg:{d:.4f}",
+                          color=color, shape="dot", size=sz, borderWidth=0)
+
+        driver2 = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+        with driver2.session() as session:
+            for url in focus_nodes:
+                for r in session.run(
+                    "MATCH (a:Page {id: $url})-[:LINKS_TO]-(b:Page) "
+                    "WHERE b.id IN $focus RETURN b.id AS neighbor",
+                    url=url, focus=list(focus_set)
+                ):
+                    nbr = r["neighbor"]
+                    if nbr > url:
+                        net2.add_edge(url, nbr, width=0.5, color="rgba(0,0,0,0.15)")
+        driver2.close()
+
+        html2 = net2.generate_html()
+
+        dim_js2 = """
+        <script type="text/javascript">
+          document.addEventListener("DOMContentLoaded", function() {
+            function init() {
+              var container = document.querySelector(".vis-network");
+              if (!container || !container.network) { setTimeout(init, 300); return; }
+              var netw = container.network;
+              netw.on("select", function(params) {
+                if (params.nodes.length === 0) {
+                  netw.body.data.nodes.forEach(function(n) { netw.body.data.nodes.update({id:n.id, opacity:1.0}); });
+                  netw.body.data.edges.forEach(function(e) { netw.body.data.edges.update({id:e.id, opacity:1.0, color:{opacity:1}}); });
+                  return;
+                }
+                var sid = params.nodes[0];
+                var connected = new Set([sid]);
+                var ce = netw.getConnectedEdges(sid);
+                ce.forEach(function(eid) {
+                  var cn = netw.getConnectedNodes(eid);
+                  cn.forEach(function(nid) { connected.add(nid); });
+                });
+                netw.body.data.nodes.forEach(function(n) {
+                  netw.body.data.nodes.update({id:n.id, opacity: connected.has(n.id) ? 1.0 : 0.1});
+                });
+                var ceSet = new Set(ce);
+                netw.body.data.edges.forEach(function(e) {
+                  var op = ceSet.has(e.id) ? 1.0 : 0.02;
+                  netw.body.data.edges.update({id:e.id, opacity:op, color:{opacity:op}});
+                });
+              });
+            }
+            init();
+          });
+        </script>
+        """
+        html2 = html2.replace("</body>", dim_js2 + "</body>")
+        st.components.v1.html(html2, height=750, scrolling=True)
