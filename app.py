@@ -25,8 +25,6 @@ min_deg = min(deg.values())
 
 st.title("SET50 Shareholder Social Graph")
 st.caption("Drag nodes to explore — click any node to highlight its connections")
-if st.button("📊 Web Graph Centrality Analysis"):
-    st.switch_page("pages/2_Centrality_Analysis.py")
 
 c1, c2, c3 = st.columns(3)
 comps = sum(1 for n in G if G.nodes[n]["type"] == "company")
