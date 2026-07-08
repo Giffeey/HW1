@@ -1,16 +1,31 @@
 """Import preprocessed web graph into Neo4j for Cypher-based centrality analysis.
 
 Requires a running Neo4j instance (local or AuraDB).
-Set env vars: NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
+Reads credentials from: env vars > .streamlit/secrets.toml > defaults.
 """
 import os
 import gzip
 import pickle
 from neo4j import GraphDatabase
 
-URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-USER = os.environ.get("NEO4J_USER", "neo4j")
-PASSWORD = os.environ.get("NEO4J_PASSWORD", "password")
+def _read_secrets():
+    try:
+        with open(".streamlit/secrets.toml") as f:
+            for line in f:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, _, v = line.partition("=")
+                    k = k.strip()
+                    v = v.strip().strip('"').strip("'")
+                    yield k, v
+    except FileNotFoundError:
+        pass
+
+secrets = dict(_read_secrets())
+
+URI = os.environ.get("NEO4J_URI") or secrets.get("NEO4J_URI", "bolt://localhost:7687")
+USER = os.environ.get("NEO4J_USER") or secrets.get("NEO4J_USER", "neo4j")
+PASSWORD = os.environ.get("NEO4J_PASSWORD") or secrets.get("NEO4J_PASSWORD", "password")
 GRAPH_PICKLE = "web_graph.pkl.gz"
 BATCH = 5000
 
