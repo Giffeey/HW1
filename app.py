@@ -261,7 +261,12 @@ elif tab == "HW2 - Centrality Analysis":
         comm_map = data["comm"]
         bridge_set = data["bridge"]
         proj_count = data["count"]
-        edge_count = data["edge_count"]
+        edge_count = data.get("edge_count")
+        if edge_count is None:
+            if os.path.exists(CACHE_FILE):
+                os.remove(CACHE_FILE)
+            st.cache_data.clear()
+            st.rerun()
 
         all_urls = sorted(deg_map, key=lambda u: -deg_map[u])
 
