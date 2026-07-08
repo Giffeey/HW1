@@ -203,9 +203,17 @@ elif tab == "HW2 - Centrality Analysis":
                     "MATCH (a)-[:LINKS_TO]-(b)-[:LINKS_TO]-(c) "
                     "WHERE a <> c RETURN b.id AS url, count(*) AS score"
                 ))
-                comm_edges = list(session.run(
+                comm_edges_raw = list(session.run(
                     "MATCH (a)-[:LINKS_TO]-(b) RETURN a.id AS src, b.id AS dst"
                 ))
+                seen = set()
+                comm_edges = []
+                for r in comm_edges_raw:
+                    s, d = r["src"], r["dst"]
+                    key = (s, d) if s < d else (d, s)
+                    if key not in seen:
+                        seen.add(key)
+                        comm_edges.append(r)
 
                 node_id_map = {}
                 for r in session.run("MATCH (p:Page) RETURN id(p) AS nodeId, p.id AS url"):
