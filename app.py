@@ -240,6 +240,12 @@ elif tab == "HW2 - Centrality Analysis":
                     neighbor_comms.setdefault(d, set()).add(sc)
             bridge_set = {url for url, c in neighbor_comms.items() if len(c) > 1}
 
+            neighbor_map = {}
+            for r in comm_edges:
+                s, d = r["src"], r["dst"]
+                neighbor_map.setdefault(s, set()).add(d)
+                neighbor_map.setdefault(d, set()).add(s)
+
             deg_map, close_map, eigen_map, pr_map, btwn_map = {}, {}, {}, {}, {}
             for r in results["Degree"]:
                 deg_map[node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")] = r["score"]
@@ -257,7 +263,8 @@ elif tab == "HW2 - Centrality Analysis":
                 "eigen": eigen_map, "pr": pr_map,
                 "comm": louvain_data, "bridge": bridge_set,
                 "count": proj_count, "edge_count": edge_count,
-                "cache_version": 3,
+                "neighbors": neighbor_map,
+                "cache_version": 4,
             }
             with gzip.open(path, "wb") as f:
                 pickle.dump(out, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -276,7 +283,8 @@ elif tab == "HW2 - Centrality Analysis":
         proj_count = data["count"]
         edge_count = data.get("edge_count")
         cache_ver = data.get("cache_version")
-        if edge_count is None or cache_ver != 3:
+        neighbor_map = data.get("neighbors", {})
+        if edge_count is None or cache_ver != 4:
             if os.path.exists(CACHE_FILE):
                 os.remove(CACHE_FILE)
             st.cache_data.clear()
@@ -388,18 +396,10 @@ elif tab == "HW2 - Centrality Analysis":
             net2.add_node(url, label=label, title=title,
                           color=val_to_color(val, vmin, vmax), shape="dot", size=sz, borderWidth=1)
 
-        driver2 = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-        with driver2.session() as session:
-            for url in focus_nodes:
-                for r in session.run(
-                    "MATCH (a:Page {id: $url})-[:LINKS_TO]-(b:Page) "
-                    "WHERE b.id IN $focus RETURN b.id AS neighbor",
-                    url=url, focus=list(focus_set)
-                ):
-                    nbr = r["neighbor"]
-                    if nbr > url:
-                        net2.add_edge(url, nbr, width=2, color="rgba(0,0,0,0.35)")
-        driver2.close()
+        for url in focus_nodes:
+            for nbr in neighbor_map.get(url, set()):
+                if nbr in focus_set and nbr > url:
+                    net2.add_edge(url, nbr, width=2, color="rgba(0,0,0,0.35)")
 
         html2 = net2.generate_html()
 
