@@ -173,10 +173,24 @@ elif tab == "HW2 - Centrality Analysis":
         @st.cache_data
         def compute_all():
             path = CACHE_FILE
+            stale = None
             if os.path.exists(path):
-                with gzip.open(path, "rb") as f:
-                    return pickle.load(f)
-            driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+                try:
+                    with gzip.open(path, "rb") as f:
+                        stale = pickle.load(f)
+                    if stale.get("cache_version") == 4:
+                        return stale
+                except Exception:
+                    stale = None
+
+            try:
+                driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+            except Exception:
+                if stale is not None:
+                    return stale
+                st.error("Cannot connect to Neo4j. Check database status.")
+                st.stop()
+
             results = {}
 
             with driver.session() as session:
@@ -281,14 +295,8 @@ elif tab == "HW2 - Centrality Analysis":
         comm_map = data["comm"]
         bridge_set = data["bridge"]
         proj_count = data["count"]
-        edge_count = data.get("edge_count")
-        cache_ver = data.get("cache_version")
+        edge_count = data.get("edge_count", 0)
         neighbor_map = data.get("neighbors", {})
-        if edge_count is None or cache_ver != 4:
-            if os.path.exists(CACHE_FILE):
-                os.remove(CACHE_FILE)
-            st.cache_data.clear()
-            st.rerun()
 
         all_urls = sorted(deg_map, key=lambda u: -deg_map[u])
 
