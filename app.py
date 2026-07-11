@@ -150,140 +150,123 @@ if tab == "HW1 - Shareholder Network":
         st.dataframe(tbl, use_container_width=True, hide_index=True)
 
 elif tab == "HW2 - Centrality Analysis":
-    NEO4J_URI = st.secrets.get("NEO4J_URI", os.environ.get("NEO4J_URI", "bolt://localhost:7687"))
+    NEO4J_URI = st.secrets.get("NEO4J_URI", os.environ.get("NEO4J_URI", ""))
     NEO4J_USER = st.secrets.get("NEO4J_USER", os.environ.get("NEO4J_USER", "neo4j"))
     NEO4J_PASSWORD = st.secrets.get("NEO4J_PASSWORD", os.environ.get("NEO4J_PASSWORD", "password"))
 
-    st.title("Web Graph Centrality Analysis (Neo4j Cypher)")
+    st.title("Web Graph Centrality Analysis")
     st.caption("quotes_2009-04.txt — 7 measures: Degree, Closeness, Betweenness, Eigenvector, PageRank, Community (Louvain), Bridges")
 
-    if not NEO4J_URI:
-        st.info(
-            "Configure Neo4j connection to enable Cypher-based centrality:\n\n"
-            "1. Set up a Neo4j instance (AuraDB free tier works, enable GDS plugin)\n"
-            "2. Create `.streamlit/secrets.toml`:\n"
-            "```toml\n"
-            'NEO4J_URI = "bolt://your-instance.databases.neo4j.io:7687"\n'
-            'NEO4J_USER = "neo4j"\n'
-            'NEO4J_PASSWORD = "your-password"\n'
-            "```\n"
-            "3. Run `py import_to_neo4j.py` to load the graph"
-        )
-    else:
-        @st.cache_data
-        def compute_all():
-            path = CACHE_FILE
-            stale = None
-            if os.path.exists(path):
-                try:
-                    with gzip.open(path, "rb") as f:
-                        stale = pickle.load(f)
-                    if stale.get("cache_version") == 4:
-                        return stale
-                except Exception:
-                    stale = None
+    @st.cache_data(ttl=86400)
+    def load_data():
+        path = CACHE_FILE
+        if os.path.exists(path):
+            with gzip.open(path, "rb") as f:
+                return pickle.load(f)
+        return None
 
+    def compute_from_neo4j():
+        driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+        with driver.session() as session:
+            session.run("CALL gds.graph.drop('web-graph', false)").consume()
+            session.run(
+                "CALL gds.graph.project('web-graph', 'Page', 'LINKS_TO', "
+                "{orientation: 'UNDIRECTED', memory: '2GB'})"
+            ).consume()
+            proj_rec = session.run("MATCH (p:Page) RETURN count(*) AS c").single()
+            proj_count = proj_rec["c"] if proj_rec else 0
+
+            gds_procs = [
+                ("Degree", "CALL gds.degree.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                ("Closeness", "CALL gds.closeness.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                ("Eigenvector", "CALL gds.eigenvector.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                ("PageRank", "CALL gds.pageRank.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                ("Louvain", "CALL gds.louvain.stream('web-graph') YIELD nodeId, communityId RETURN nodeId, communityId"),
+            ]
+            results = {}
+            for label, query in gds_procs:
+                results[label] = list(session.run(query))
+
+            results["Betweenness"] = list(session.run(
+                "MATCH (a)-[:LINKS_TO]-(b)-[:LINKS_TO]-(c) "
+                "WHERE a <> c RETURN b.id AS url, count(*) AS score"
+            ))
+            comm_edges_raw = list(session.run(
+                "MATCH (a)-[:LINKS_TO]-(b) RETURN a.id AS src, b.id AS dst"
+            ))
+            seen = set()
+            comm_edges = []
+            for r in comm_edges_raw:
+                s, d = r["src"], r["dst"]
+                key = (s, d) if s < d else (d, s)
+                if key not in seen:
+                    seen.add(key)
+                    comm_edges.append(r)
+
+            edge_count = session.run("MATCH ()-[:LINKS_TO]->() RETURN count(*) AS n").single()["n"]
+            node_id_map = {}
+            for r in session.run("MATCH (p:Page) RETURN id(p) AS nodeId, p.id AS url"):
+                node_id_map[r["nodeId"]] = r["url"]
+
+            session.run("CALL gds.graph.drop('web-graph', false)").consume()
+        driver.close()
+
+        louvain_data = {}
+        for r in results["Louvain"]:
+            url = node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")
+            louvain_data[url] = r["communityId"]
+
+        neighbor_comms = {}
+        for r in comm_edges:
+            s, d = r["src"], r["dst"]
+            sc, dc = louvain_data.get(s), louvain_data.get(d)
+            if sc is not None and dc is not None:
+                neighbor_comms.setdefault(s, set()).add(dc)
+                neighbor_comms.setdefault(d, set()).add(sc)
+        bridge_set = {url for url, c in neighbor_comms.items() if len(c) > 1}
+
+        neighbor_map = {}
+        for r in comm_edges:
+            s, d = r["src"], r["dst"]
+            neighbor_map.setdefault(s, set()).add(d)
+            neighbor_map.setdefault(d, set()).add(s)
+
+        deg_map, close_map, eigen_map, pr_map, btwn_map = {}, {}, {}, {}, {}
+        for r in results["Degree"]:
+            deg_map[node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")] = r["score"]
+        for r in results["Closeness"]:
+            close_map[node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")] = r["score"]
+        for r in results["Eigenvector"]:
+            eigen_map[node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")] = r["score"]
+        for r in results["PageRank"]:
+            pr_map[node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")] = r["score"]
+        for r in results["Betweenness"]:
+            btwn_map[r["url"]] = r["score"]
+
+        out = {
+            "deg": deg_map, "close": close_map, "btwn": btwn_map,
+            "eigen": eigen_map, "pr": pr_map,
+            "comm": louvain_data, "bridge": bridge_set,
+            "count": proj_count, "edge_count": edge_count,
+            "neighbors": neighbor_map,
+        }
+        with gzip.open(CACHE_FILE, "wb") as f:
+            pickle.dump(out, f, protocol=pickle.HIGHEST_PROTOCOL)
+        return out
+
+    data = load_data()
+
+    if data is None and NEO4J_URI:
+        with st.spinner("Computing from Neo4j..."):
             try:
-                driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-                with driver.session() as session:
-                    session.run("CALL gds.graph.drop('web-graph', false)").consume()
-                    session.run(
-                        "CALL gds.graph.project('web-graph', 'Page', 'LINKS_TO', "
-                        "{orientation: 'UNDIRECTED', memory: '2GB'})"
-                    ).consume()
-
-                    proj_rec = session.run("MATCH (p:Page) RETURN count(*) AS c").single()
-                    proj_count = proj_rec["c"] if proj_rec else 0
-
-                    gds_procs = [
-                        ("Degree", "CALL gds.degree.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
-                        ("Closeness", "CALL gds.closeness.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
-                        ("Eigenvector", "CALL gds.eigenvector.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
-                        ("PageRank", "CALL gds.pageRank.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
-                        ("Louvain", "CALL gds.louvain.stream('web-graph') YIELD nodeId, communityId RETURN nodeId, communityId"),
-                    ]
-                    results = {}
-                    for label, query in gds_procs:
-                        results[label] = list(session.run(query))
-
-                    results["Betweenness"] = list(session.run(
-                        "MATCH (a)-[:LINKS_TO]-(b)-[:LINKS_TO]-(c) "
-                        "WHERE a <> c RETURN b.id AS url, count(*) AS score"
-                    ))
-                    comm_edges_raw = list(session.run(
-                        "MATCH (a)-[:LINKS_TO]-(b) RETURN a.id AS src, b.id AS dst"
-                    ))
-                    seen = set()
-                    comm_edges = []
-                    for r in comm_edges_raw:
-                        s, d = r["src"], r["dst"]
-                        key = (s, d) if s < d else (d, s)
-                        if key not in seen:
-                            seen.add(key)
-                            comm_edges.append(r)
-
-                    edge_count = session.run(
-                        "MATCH ()-[:LINKS_TO]->() RETURN count(*) AS n"
-                    ).single()["n"]
-
-                    node_id_map = {}
-                    for r in session.run("MATCH (p:Page) RETURN id(p) AS nodeId, p.id AS url"):
-                        node_id_map[r["nodeId"]] = r["url"]
-
-                    session.run("CALL gds.graph.drop('web-graph', false)").consume()
-                driver.close()
-            except Exception:
-                if stale is not None:
-                    return stale
-                st.error("Neo4j connection failed. Check database status and DNS.")
+                data = compute_from_neo4j()
+            except Exception as e:
+                st.error(f"Neo4j error: {e}")
                 st.stop()
 
-            louvain_data = {}
-            for r in results["Louvain"]:
-                url = node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")
-                louvain_data[url] = r["communityId"]
-
-            neighbor_comms = {}
-            for r in comm_edges:
-                s, d = r["src"], r["dst"]
-                sc, dc = louvain_data.get(s), louvain_data.get(d)
-                if sc is not None and dc is not None:
-                    neighbor_comms.setdefault(s, set()).add(dc)
-                    neighbor_comms.setdefault(d, set()).add(sc)
-            bridge_set = {url for url, c in neighbor_comms.items() if len(c) > 1}
-
-            neighbor_map = {}
-            for r in comm_edges:
-                s, d = r["src"], r["dst"]
-                neighbor_map.setdefault(s, set()).add(d)
-                neighbor_map.setdefault(d, set()).add(s)
-
-            deg_map, close_map, eigen_map, pr_map, btwn_map = {}, {}, {}, {}, {}
-            for r in results["Degree"]:
-                deg_map[node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")] = r["score"]
-            for r in results["Closeness"]:
-                close_map[node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")] = r["score"]
-            for r in results["Eigenvector"]:
-                eigen_map[node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")] = r["score"]
-            for r in results["PageRank"]:
-                pr_map[node_id_map.get(r["nodeId"], f"node_{r['nodeId']}")] = r["score"]
-            for r in results["Betweenness"]:
-                btwn_map[r["url"]] = r["score"]
-
-            out = {
-                "deg": deg_map, "close": close_map, "btwn": btwn_map,
-                "eigen": eigen_map, "pr": pr_map,
-                "comm": louvain_data, "bridge": bridge_set,
-                "count": proj_count, "edge_count": edge_count,
-                "neighbors": neighbor_map,
-                "cache_version": 4,
-            }
-            with gzip.open(path, "wb") as f:
-                pickle.dump(out, f, protocol=pickle.HIGHEST_PROTOCOL)
-            return out
-
-        with st.spinner("Computing…"):
-            data = compute_all()
+    if data is None:
+        st.error("No cached data found and Neo4j is not configured/available.")
+        st.stop()
 
         deg_map = data["deg"]
         close_map = data["close"]
@@ -463,10 +446,16 @@ elif tab == "HW2 - Centrality Analysis":
             })
         tbl2 = pd.DataFrame(rows)
         if st.button("Refresh data from Neo4j", type="secondary"):
-            if os.path.exists(CACHE_FILE):
-                os.remove(CACHE_FILE)
-            st.cache_data.clear()
-            st.rerun()
+            if not NEO4J_URI:
+                st.error("Neo4j not configured. Set NEO4J_URI in secrets.")
+            else:
+                with st.spinner("Refreshing from Neo4j..."):
+                    try:
+                        data = compute_from_neo4j()
+                        st.cache_data.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Neo4j refresh failed: {e}")
 
         with st.expander("Centrality Table", expanded=False):
             st.dataframe(tbl2, use_container_width=True, hide_index=True)
