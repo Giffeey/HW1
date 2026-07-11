@@ -185,60 +185,58 @@ elif tab == "HW2 - Centrality Analysis":
 
             try:
                 driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+                with driver.session() as session:
+                    session.run("CALL gds.graph.drop('web-graph', false)").consume()
+                    session.run(
+                        "CALL gds.graph.project('web-graph', 'Page', 'LINKS_TO', "
+                        "{orientation: 'UNDIRECTED', memory: '2GB'})"
+                    ).consume()
+
+                    proj_rec = session.run("MATCH (p:Page) RETURN count(*) AS c").single()
+                    proj_count = proj_rec["c"] if proj_rec else 0
+
+                    gds_procs = [
+                        ("Degree", "CALL gds.degree.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                        ("Closeness", "CALL gds.closeness.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                        ("Eigenvector", "CALL gds.eigenvector.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                        ("PageRank", "CALL gds.pageRank.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
+                        ("Louvain", "CALL gds.louvain.stream('web-graph') YIELD nodeId, communityId RETURN nodeId, communityId"),
+                    ]
+                    results = {}
+                    for label, query in gds_procs:
+                        results[label] = list(session.run(query))
+
+                    results["Betweenness"] = list(session.run(
+                        "MATCH (a)-[:LINKS_TO]-(b)-[:LINKS_TO]-(c) "
+                        "WHERE a <> c RETURN b.id AS url, count(*) AS score"
+                    ))
+                    comm_edges_raw = list(session.run(
+                        "MATCH (a)-[:LINKS_TO]-(b) RETURN a.id AS src, b.id AS dst"
+                    ))
+                    seen = set()
+                    comm_edges = []
+                    for r in comm_edges_raw:
+                        s, d = r["src"], r["dst"]
+                        key = (s, d) if s < d else (d, s)
+                        if key not in seen:
+                            seen.add(key)
+                            comm_edges.append(r)
+
+                    edge_count = session.run(
+                        "MATCH ()-[:LINKS_TO]->() RETURN count(*) AS n"
+                    ).single()["n"]
+
+                    node_id_map = {}
+                    for r in session.run("MATCH (p:Page) RETURN id(p) AS nodeId, p.id AS url"):
+                        node_id_map[r["nodeId"]] = r["url"]
+
+                    session.run("CALL gds.graph.drop('web-graph', false)").consume()
+                driver.close()
             except Exception:
                 if stale is not None:
                     return stale
-                st.error("Cannot connect to Neo4j. Check database status.")
+                st.error("Neo4j connection failed. Check database status and DNS.")
                 st.stop()
-
-            results = {}
-
-            with driver.session() as session:
-                session.run("CALL gds.graph.drop('web-graph', false)").consume()
-                session.run(
-                    "CALL gds.graph.project('web-graph', 'Page', 'LINKS_TO', "
-                    "{orientation: 'UNDIRECTED', memory: '2GB'})"
-                ).consume()
-
-                proj_rec = session.run("MATCH (p:Page) RETURN count(*) AS c").single()
-                proj_count = proj_rec["c"] if proj_rec else 0
-
-                gds_procs = [
-                    ("Degree", "CALL gds.degree.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
-                    ("Closeness", "CALL gds.closeness.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
-                    ("Eigenvector", "CALL gds.eigenvector.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
-                    ("PageRank", "CALL gds.pageRank.stream('web-graph') YIELD nodeId, score RETURN nodeId, score"),
-                    ("Louvain", "CALL gds.louvain.stream('web-graph') YIELD nodeId, communityId RETURN nodeId, communityId"),
-                ]
-                for label, query in gds_procs:
-                    results[label] = list(session.run(query))
-
-                results["Betweenness"] = list(session.run(
-                    "MATCH (a)-[:LINKS_TO]-(b)-[:LINKS_TO]-(c) "
-                    "WHERE a <> c RETURN b.id AS url, count(*) AS score"
-                ))
-                comm_edges_raw = list(session.run(
-                    "MATCH (a)-[:LINKS_TO]-(b) RETURN a.id AS src, b.id AS dst"
-                ))
-                seen = set()
-                comm_edges = []
-                for r in comm_edges_raw:
-                    s, d = r["src"], r["dst"]
-                    key = (s, d) if s < d else (d, s)
-                    if key not in seen:
-                        seen.add(key)
-                        comm_edges.append(r)
-
-                edge_count = session.run(
-                    "MATCH ()-[:LINKS_TO]->() RETURN count(*) AS n"
-                ).single()["n"]
-
-                node_id_map = {}
-                for r in session.run("MATCH (p:Page) RETURN id(p) AS nodeId, p.id AS url"):
-                    node_id_map[r["nodeId"]] = r["url"]
-
-                session.run("CALL gds.graph.drop('web-graph', false)").consume()
-            driver.close()
 
             louvain_data = {}
             for r in results["Louvain"]:
